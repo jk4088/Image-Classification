@@ -1,0 +1,309 @@
+---
+title: "Project 2 - Main script"
+author: "Jerome Kafrouni, Ayano Kase, Joo Kim, Chunzi Wang, Chuyuan Zhou"
+date: "March 5, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## This R Markdown documents the steps we used to classify images of dogs and cats for STAT4243 Project 2. 
+
+### Packages used: 
+
+```{r, warning = FALSE}
+packages.used=c("gbm", "knn", "xgboost", "randomForest", "ggplot2", "OpenImageR", "grDevices", "e1071", "pillar", "dplyr", "tidyr", "clue")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used,
+intersect(installed.packages()[,1],
+packages.used))
+
+# install additional packages
+if(length(packages.needed)>0){
+install.packages(packages.needed, dependencies = TRUE)
+}
+
+if(!require("EBImage")){
+  source("https://bioconductor.org/biocLite.R")
+  biocLite("EBImage")
+}
+
+library("EBImage")
+library("gbm")
+library("ggplot2")
+```
+
+### Step 0: Specify directories.
+
+```{r wkdir, eval=FALSE}
+setwd("../doc") 
+experiment_dir <- "../data/pets/" 
+img_train_dir  <- paste(experiment_dir, "train/", sep="")
+img_test_dir   <- paste(experiment_dir, "test/", sep="")
+```
+
+### Step 1: Set up controls for model evaluation.
+
+In this step, we have a set of controls for the model evaluation.  The code in the rest of the document runs (or not) according to our choices here. 
+
++ (TRUE/FALSE) run cross-validation on the training set
++ (number) K, the number of CV folds
++ (TRUE/FALSE) process features for training set
++ (TRUE/FALSE) run evaluation on an independent test set
++ (TRUE/FALSE) process features for test set
+
+```{r exp_setup}
+run.cv            <- TRUE # run cross-validation on the training set
+K                 <- 5    # number of CV folds
+run.feature.train <- FALSE # process features for training set
+run.test          <- FALSE # run evaluation on an independent test set
+run.feature.test  <- TRUE # process features for test set
+```
+
+Using cross-validation or independent test set evaluation, we compare the performance of different classifiers. To set up parameters, uncomment the chunk for specific feature to be trained.
+
+
+```{r model_setup}
+# Model values for randomForest:
+model_values <- list()
+k = 1
+for(i in seq(300, 500, 100)){
+  for(j in seq(60, 90, 10)){
+    model_values[[k]] = list(ntree = i, mtry = j)
+    k = k + 1
+  }
+}
+
+# Model values for GBM:
+# model_values <- list()
+# k = 1
+# for(i in list(1, 2, 3, 4, 5, 10)){
+#  model_values[[k]] = list(depth = i)
+#  k = k + 1
+#}
+
+# Model values for xgboost (only one parameter):
+# model_values <- list()
+# k = 1
+# for(i in list(1, 2, 3, 4, 5, 10)){
+#   model_values[[k]] = list(depth = i)
+#   k = k + 1
+# }
+
+
+# Model values for svm kernel
+# model_values <- list()
+# k = 1
+# for(i in c(0,0.01,0.1,1,5,10,100)){
+#   for(j in c(0,0.000001,0.00001,0.0001,0.001,1)){
+#     model_values[[k]] = list(Cost = i, Gamma = j)
+#     k = k + 1
+#   }
+# }
+
+# Model values for svm linear
+# model_values <- c(0.001, 0.01, 0.1, 1, 10, 100, 1000)
+# model_labels <- paste("SVM with cost =", model_values)
+
+# logistic reg doesn't need parameters, so pass empty list:
+# model_values <- list()
+# model_values[[1]] = list()
+```
+
+### Step 2: Import training images class labels.
+
+"cat" will be labeled 1, and "dog" labeled 0.
+
+```{r train_label}
+label_train <- read.table(paste(experiment_dir, "train_label.txt", sep = ""), header = F)
+label_train <- as.numeric(unlist(label_train) == "cat")
+```
+
+### Step 3: Construct visual features
+
+
+```{r}
+# train_indexes <- seq(1,100) if testing on a subset of the data 
+train_indexes <- "all"
+```
+
+The below code imports sift from feature.R, but you may "method = " to import other features. 
+
+Note: the feature functions are the same for both training and testing, except for sift that needs to load a specific file and therefore has been split into two metods "sift" and "sift_test". We found this to make the code cleaner even if there is some redundancy.
+
+```{r feature}
+source("../lib/feature.R")
+
+tm_feature_train <- NA
+
+if(run.feature.train){
+ tm_feature_train <- system.time(dat_train <- feature(img_train_dir, indexes=train_indexes,
+                                                      method = "sift", export = FALSE))
+} #update method to import "hog", "hsv", or "rgb"
+
+tm_feature_test <- NA
+if(run.feature.test){
+  tm_feature_test <- system.time(dat_test <- feature(img_train_dir, indexes = "all",
+                                                      method= "sift_test", export = FALSE))
+}
+
+save(dat_train, file = "../output/feature_train.RData")
+
+```
+
+#### Dealing with imbalanced data:
+
+There are more dogs than cats in our training data; therefore, our model will be more biased toward dogs. As a basic approach, we removed images of dogs from the dataset to create a more balanced dataset that has an equal number of dog and cat images. There are 652 images of cats and 1358 imgaes of dogs, so we'll drop 706 images of dogs. 
+
+We are aware that this undersampling approach is suboptimal because we lose a portion of training data. We recommend a variety of approaches for dealing with an unbalanced dataset in the presentation. 
+
+```{r}
+dogs_indexes <- which(label_train == 0)
+cats_indexes <- which(label_train == 1)
+
+dat_train <- dat_train[c(dogs_indexes[1:652], cats_indexes),]
+label_train <- label_train[c(dogs_indexes[1:652], cats_indexes)]
+```
+
+
+###Step 4: Train a classification model with training images (and the visual features constructed above)
+
+Call the train model and test model from library. 
+
+`train.R` and `test.R` should be wrappers for all your model training steps and your classification/prediction steps. 
++ `train.R`
+  + Input: a path that points to the training set features.
+  + Input: an R object of training sample labels.
+  + Output: an RData file that contains trained classifiers in the forms of R objects: models/settings/links to external trained configurations.
++ `test.R`
+  + Input: a path that points to the test set features.
+  + Input: an R object that contains a trained classifier.
+  + Output: an R object of class label predictions on the test set. If there are multiple classifiers under evaluation, there should be multiple sets of label predictions. 
+  
+```{r loadlib}
+source("../lib/train.R")
+source("../lib/test.R")
+```
+
+#### Model selection with cross-validation
+
+Here we showcase randomForest as an example for cross validation, selecting between model parameters, in this case the number of trees and number of variables. 
+
+```{r runcv, message=FALSE, warning=FALSE}
+source("../lib/cross_validation.R")
+
+# if you're testing on a subset of the data, for debugging purposes:
+# (note that you can't do cv if you don't have enough samples (less than 100) even for debbuging)
+if (train_indexes != "all"){
+  label_train <- label_train[train_indexes]
+}
+
+# choose which model to train, can select from "gbm", "svm_rbf", "svm_lin", or "logisticRegression"
+model = "randomForest"
+
+if(run.cv){
+  err_cv <- array(dim = c(length(model_values), 2))
+  err_cv
+  for(k in 1:length(model_values)){
+    cat("k=", k, "\n")
+    err_cv[k,] <- cv.function(dat_train, label_train, model_values[[k]], model, K)
+    print(paste0('err for this k: ', err_cv[k,]))
+  }
+  save(err_cv, file = paste0("../output/err_cv_", model, ".RData"))
+}
+
+```
+
+* Visualize the cross-validation results. 
+
+As randomForest uses 2 parameters, we visualize the results with a heatmap.
+
+```{r cv_vis}
+library(ggplot2)
+
+if(run.cv){
+  # load("../output/err_cv.RData")
+  # pdf("../fig/cv_results.pdf", width=7, height=5)
+
+  if (length(model_values[[1]]) == 1){
+    # plot, like in the starter code
+    plot(as.vector(unlist(model_values)), err_cv[,1], xlab = "Cost", ylab = "CV Error",
+         main = "Cross Validation Error", type = "n", ylim = c(0, 0.35))
+    points(as.vector(unlist(model_values)), err_cv[,1], col = "blue", pch=16)
+    lines(as.vector(unlist(model_values)), err_cv[,1], col = "blue")
+    arrows(as.vector(unlist(model_values)), err_cv[,1] - err_cv[,2], as.vector(unlist(model_values)), err_cv[,1] + err_cv[,2],
+           length = 0.1, angle = 90, code = 3)
+  
+  } else if(length(model_values[[1]]) == 2){
+    # do a heatmap
+    par_1_name = names(model_values[[1]])[1]
+    par_2_name = names(model_values[[1]])[2]
+    
+    par_1 = sapply(model_values, function(x) as.numeric(x[1]))
+    par_2 = sapply(model_values, function(x) as.numeric(x[2]))
+    # construct a dataframe containing for each row the value of 1st param, the value of 2nd param, and the cv results (mean error and std of error)
+    err = data.frame(par_1, par_2, mean_err_cv = err_cv[,1], std_err_cv = err_cv[,2])
+
+    # plot those results in a 2d heatmap
+    ggplot(data = err[,c(1,2,3)], aes(x=par_1, y=par_2, fill=mean_err_cv)) + 
+      geom_tile() +
+      geom_text(aes(par_1, par_2, label = round(mean_err_cv, digits=2)), color = "black", size = 4) +
+      # scale_fill_gradient2(low = "green", high = "red", mid = "white", 
+      #   midpoint = 0.5, limit = c(0, 1), space = "Lab") +
+      labs(x=par_1_name, y=par_2_name) +
+      theme(
+        panel.grid.major = element_blank(),
+        panel.background = element_blank()
+      )
+    
+  }
+  
+}
+
+```
+
+* Choose the "best" parameter values for randomForest
+
+```{r best_model}
+model_best <- model_values[1]
+if(run.cv){
+  model_best <- model_values[which.min(err_cv[, 1])]
+}
+model_best
+```
+
+* Train the model with the entire training set using the selected model (in this case, model parameter) via cross-validation. 
+
+The below code gives you run-time. 
+
+```{r final_train}
+tm_train <- system.time(fit_train <- train(dat_train, label_train, model, model_best[[1]]))
+tm_train
+```
+
+### Step 5: Make prediction 
+
+Feed the final training model with the test data.  (Note that for this to truly be 'test' data, it should have had no part of the training procedure used above.) 
+
+```{r test}
+tm_test <- NA
+if(run.test){
+  load(file = paste0("../output/feature_", "zip", "_", "test", ".RData"))
+  load(file = "../output/fit_train.RData")
+  tm_test <- system.time(pred_test <- test(fit_train, dat_test))
+  save(pred_test, file = "../output/pred_test.RData")
+}
+```
+
+### Summarize Running Time
+
+Prediction performance matters, so does the running times for constructing features and for training the model, especially when the computation resource is limited. 
+
+```{r running_time}
+cat("Time for constructing training features=", tm_feature_train[1], "s \n")
+cat("Time for constructing testing features=", tm_feature_test[1], "s \n")
+cat("Time for training model=", tm_train[1], "s \n")
+cat("Time for making prediction=", tm_test[1], "s \n")
+```
+

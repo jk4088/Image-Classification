@@ -1,0 +1,71 @@
+---
+title: "SIFT Features for Image Classification "
+output: html_document
+---
+
+Set directory:
+
+```{r}
+experiment_dir <- "E:/GitHub/project-2-predictive-modelling-group-2/"
+img_train_dir <- paste(experiment_dir, "data/pets/train/", sep="")
+sift_feature_train_dir  <- paste(experiment_dir, "output/train-features/", sep="")
+```
+
+dog = 1, cat = 0, there're more dog images than cat in this training set, which may lead to predictions prone to dogs.
+
+```{r}
+label_train <- read.table(paste(experiment_dir, "data/pets/train_label.txt", sep = ""), header = F)
+label_train <- as.numeric(unlist(label_train) == "dog")
+table(label_train)
+```
+
+```{r}
+n_files <- length(list.files(sift_feature_train_dir))
+n_files
+```
+
+Try to aggregate all the raw features of 2000 training images into a matrix.
+
+```{r}
+# Step 1: count how many keypoints we have in total accross all images
+total_nb_of_keypoints <- 0
+for (i in 1:n_files) {
+  pet_i <- get(load(paste(sift_feature_train_dir,"pet",i,".jpg.sift.Rdata",sep=""))[2])
+  total_nb_of_keypoints = total_nb_of_keypoints + dim(pet_i)[1]
+}
+
+# Step 2: initialize a matrix to store all these keypoints
+pets_sift <- matrix(0, nrow=total_nb_of_keypoints, ncol=129)
+  
+# Step 3: reload the keypoints but this time add them to the matrix instead of simply counting them
+k = 0
+for (i in 1:n_files) {
+  pet_i <- get(load(paste(sift_feature_train_dir,"pet",i,".jpg.sift.Rdata",sep=""))[2])
+  # pet_i has a certain number of rows, each is of length 128
+  # loop over each row and add it to the pets_sift (which is full of NA initially)
+  # update a counter k to know what next row to fill
+  for (row in 1:nrow(pet_i)) {
+    pets_sift[k,1:128] = pet_i[row,]
+    pets_sift[k,129] = i
+    k = k + 1
+  }
+}
+```
+
+```{r}
+dim(pets_sift)
+```
+
+Bag of Features method: Use kmeans clustering to put keypoints into clusters to reduce dimension.
+
+```{r}
+clusters <- kmeans(pets_sift[,-128], 100, iter.max = 100, algorithm="Lloyd")
+```
+
+
+```{r}
+save(clusters, file = "E:/GitHub/project-2-predictive-modelling-group-2/output/clusters.RData")
+save(pets_sift, file = "E:/GitHub/project-2-predictive-modelling-group-2/output/pets_sift.RData")
+```
+
+  
