@@ -1,6 +1,6 @@
 # Project 2: Predictive Modelling
 
-*This is a group project to which I contributed for Spring 2018 QMSS4243 Applied Data Science at Columbia University.*
+*This is a group project to which I contributed for Spring 2018 STAT 4243 Applied Data Science at Columbia University.*
 
 ----
 
